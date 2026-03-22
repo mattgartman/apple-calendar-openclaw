@@ -1,0 +1,22 @@
+#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR=${0:A:h}
+ROOT_DIR=${SCRIPT_DIR:h}
+BUILD_DIR="${ROOT_DIR}/.build/local"
+MODULE_CACHE="${BUILD_DIR}/ModuleCache"
+BINARY="${BUILD_DIR}/apple-calendar-cli"
+SOURCE="${ROOT_DIR}/Sources/AppleCalendarCLI/main.swift"
+
+mkdir -p "${BUILD_DIR}" "${MODULE_CACHE}"
+
+if [[ ! -x "${BINARY}" || "${SOURCE}" -nt "${BINARY}" ]]; then
+  swiftc \
+    -parse-as-library \
+    -module-cache-path "${MODULE_CACHE}" \
+    -framework EventKit \
+    "${SOURCE}" \
+    -o "${BINARY}" >&2
+fi
+
+exec "${BINARY}" "$@"

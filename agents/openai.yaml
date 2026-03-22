@@ -1,0 +1,7 @@
+interface:
+  display_name: "Apple Calendar"
+  short_description: "Read and manage Apple Calendar events"
+  default_prompt: "Use $apple-calendar to read or modify Apple Calendar events on this Mac."
+
+policy:
+  allow_implicit_invocation: true

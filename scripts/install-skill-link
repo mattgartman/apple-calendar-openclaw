@@ -1,0 +1,22 @@
+#!/bin/zsh
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: $0 /path/to/openclaw/skills" >&2
+  exit 1
+fi
+
+SCRIPT_DIR=${0:A:h}
+ROOT_DIR=${SCRIPT_DIR:h}
+TARGET_DIR=$1
+LINK_PATH="${TARGET_DIR}/apple-calendar"
+
+mkdir -p "${TARGET_DIR}"
+
+if [[ -e "${LINK_PATH}" && ! -L "${LINK_PATH}" ]]; then
+  echo "refusing to overwrite non-symlink: ${LINK_PATH}" >&2
+  exit 1
+fi
+
+ln -sfn "${ROOT_DIR}" "${LINK_PATH}"
+echo "linked ${ROOT_DIR} -> ${LINK_PATH}"
