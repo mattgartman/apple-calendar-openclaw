@@ -492,10 +492,6 @@ final class CalendarCLI {
         guard event.calendar.allowsContentModifications else {
             throw CLIError.message("Calendar '\(event.calendar.title)' does not allow modifications.")
         }
-        guard let externalIdentifier = normalizedOptionalText(event.calendarItemExternalIdentifier) else {
-            throw CLIError.message("This event does not expose a shareable external identifier, so attendees cannot be added through Calendar automation.")
-        }
-
         let existingEmails = Set(
             (event.attendees ?? [])
                 .compactMap(attendeeEmail)
@@ -509,8 +505,10 @@ final class CalendarCLI {
         }
 
         try runCalendarAttendeeScript(
-            calendarIdentifier: event.calendar.calendarIdentifier,
-            eventExternalIdentifier: externalIdentifier,
+            calendarTitle: event.calendar.title,
+            eventTitle: event.title ?? "",
+            eventStartUnix: Int(event.startDate.timeIntervalSince1970),
+            eventEndUnix: Int(event.endDate.timeIntervalSince1970),
             emails: emailsToAdd
         )
 
@@ -667,30 +665,59 @@ final class CalendarCLI {
     }
 
     private func runCalendarAttendeeScript(
-        calendarIdentifier: String,
-        eventExternalIdentifier: String,
+        calendarTitle: String,
+        eventTitle: String,
+        eventStartUnix: Int,
+        eventEndUnix: Int,
         emails: [String]
     ) throws {
         let script = """
-        on run argv
-            if (count of argv) is not 3 then error "Expected calendar identifier, event external identifier, and newline-delimited emails."
+        on dateFromUnix(unixSeconds)
+            set targetDate to (current date)
+            set year of targetDate to 1970
+            set month of targetDate to January
+            set day of targetDate to 1
+            set time of targetDate to 0
+            return targetDate + unixSeconds
+        end dateFromUnix
 
-            set calendarIdentifierValue to item 1 of argv
-            set eventUIDValue to item 2 of argv
-            set emailBlob to item 3 of argv
+        on run argv
+            if (count of argv) is not 5 then error "Expected calendar title, event title, start timestamp, end timestamp, and newline-delimited emails."
+
+            set calendarTitleValue to item 1 of argv
+            set eventTitleValue to item 2 of argv
+            set eventStartUnixValue to (item 3 of argv) as integer
+            set eventEndUnixValue to (item 4 of argv) as integer
+            set emailBlob to item 5 of argv
 
             if emailBlob is "" then return "ok"
 
             set AppleScript's text item delimiters to linefeed
             set emailItems to text items of emailBlob
+            set targetStartDate to my dateFromUnix(eventStartUnixValue)
+            set targetEndDate to my dateFromUnix(eventEndUnixValue)
 
             tell application "Calendar"
-                set targetCalendar to first calendar whose calendarIdentifier is calendarIdentifierValue
-                set targetEvent to first event of targetCalendar whose uid is eventUIDValue
+                set candidateCalendars to every calendar whose name is calendarTitleValue
+                if (count of candidateCalendars) is 0 then error "No Calendar.app calendar found with name " & quoted form of calendarTitleValue
+
+                set targetEvent to missing value
+                repeat with targetCalendar in candidateCalendars
+                    set matchingEvents to every event of targetCalendar whose summary is eventTitleValue and start date is targetStartDate and end date is targetEndDate
+                    if (count of matchingEvents) > 0 then
+                        set targetEvent to first item of matchingEvents
+                        exit repeat
+                    end if
+                end repeat
+
+                if targetEvent is missing value then
+                    error "No Calendar.app event matched title/start/end in calendar " & quoted form of calendarTitleValue
+                end if
 
                 repeat with attendeeEmail in emailItems
-                    if attendeeEmail is not "" then
-                        make new attendee at end of attendees of targetEvent with properties {email:attendeeEmail}
+                    set attendeeEmailValue to (contents of attendeeEmail)
+                    if attendeeEmailValue is not "" then
+                        make new attendee at end of attendees of targetEvent with properties {email:attendeeEmailValue}
                     end if
                 end repeat
             end tell
@@ -703,8 +730,10 @@ final class CalendarCLI {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = [
             "-e", script,
-            calendarIdentifier,
-            eventExternalIdentifier,
+            calendarTitle,
+            eventTitle,
+            String(eventStartUnix),
+            String(eventEndUnix),
             emails.joined(separator: "\n"),
         ]
 
