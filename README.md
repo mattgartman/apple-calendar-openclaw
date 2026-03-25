@@ -22,10 +22,13 @@ This repo includes:
 ./scripts/apple-calendar list-events --start 2026-03-22T00:00:00-04:00 --end 2026-03-23T00:00:00-04:00
 ./scripts/apple-calendar create-event --calendar Work --title "Planning" --start 2026-03-22T15:00:00-04:00 --end 2026-03-22T15:30:00-04:00
 ./scripts/apple-calendar update-event --id EVENT_ID --title "Updated title"
+./scripts/apple-calendar add-attendees --id EVENT_ID --emails "person1@example.com,person2@example.com"
 ./scripts/apple-calendar delete-event --id EVENT_ID
 ```
 
 The script compiles the Swift CLI on demand into `.build/local/`, which is ignored by git.
+
+Adding attendees uses Calendar.app automation because Apple `EventKit` does not expose writable attendee APIs. macOS may ask the invoking host app for Automation permission to control Calendar, and attendee changes only work on calendars that support invitations.
 
 ## Install Into OpenClaw
 

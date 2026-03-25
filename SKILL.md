@@ -28,6 +28,7 @@ Run `./scripts/apple-calendar authorize` before the first read or write. macOS w
 ./scripts/apple-calendar get-event --id EVENT_ID
 ./scripts/apple-calendar create-event --calendar Work --title "Planning" --start 2026-03-22T15:00:00-04:00 --end 2026-03-22T15:30:00-04:00 --location "Zoom"
 ./scripts/apple-calendar update-event --id EVENT_ID --title "Updated title" --notes "Revised agenda" --span this
+./scripts/apple-calendar add-attendees --id EVENT_ID --emails "person1@example.com,person2@example.com"
 ./scripts/apple-calendar delete-event --id EVENT_ID --span this
 ```
 
@@ -36,5 +37,8 @@ Run `./scripts/apple-calendar authorize` before the first read or write. macOS w
 - `--calendar` accepts either a calendar title or a calendar identifier. Exact matches are preferred.
 - `list-events` supports `--query` and `--limit` for filtering.
 - `update-event` treats `--location ""`, `--notes ""`, and `--url ""` as clear operations.
+- `add-attendees` appends invitees by email to an existing event and returns the refreshed attendee list.
+- `add-attendees` uses Calendar.app automation in addition to `EventKit`, so macOS may prompt the host app for Automation permission to control Calendar.
+- Attendee edits depend on an invite-capable calendar account. Local calendars may not support sending invitations.
 - `--span future` applies recurring-event updates or deletes to future items in the series. The default is `this`.
 - All commands print JSON to stdout and return a non-zero exit code on failure.

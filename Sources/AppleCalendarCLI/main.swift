@@ -27,6 +27,14 @@ struct CalendarPayload: Encodable {
 }
 
 struct EventPayload: Encodable {
+    struct AttendeePayload: Encodable {
+        let name: String?
+        let email: String?
+        let status: String
+        let role: String
+        let isCurrentUser: Bool
+    }
+
     let id: String
     let externalId: String?
     let title: String
@@ -40,6 +48,7 @@ struct EventPayload: Encodable {
     let url: String?
     let hasRecurrenceRules: Bool
     let timezone: String?
+    let attendees: [AttendeePayload]
 }
 
 struct StatusPayload: Encodable {
@@ -185,6 +194,7 @@ struct ArgumentParser {
       apple-calendar-cli get-event --id <event-id>
       apple-calendar-cli create-event --calendar <name-or-id> --title <text> --start <date> --end <date> [--location <text>] [--notes <text>] [--url <url>] [--all-day [true|false]]
       apple-calendar-cli update-event --id <event-id> [--calendar <name-or-id>] [--title <text>] [--start <date>] [--end <date>] [--location <text>] [--notes <text>] [--url <url>] [--all-day [true|false]] [--span this|future]
+      apple-calendar-cli add-attendees --id <event-id> --emails <email1,email2,...>
       apple-calendar-cli delete-event --id <event-id> [--span this|future]
 
     Date formats:
@@ -290,6 +300,9 @@ final class CalendarCLI {
         case "update-event":
             try await ensureFullAccess()
             try updateEvent(Options(values: parsed.options))
+        case "add-attendees":
+            try await ensureFullAccess()
+            try addAttendees(Options(values: parsed.options))
         case "delete-event":
             try await ensureFullAccess()
             try deleteEvent(Options(values: parsed.options))
@@ -468,6 +481,46 @@ final class CalendarCLI {
         try JSON.write(DeleteResponse(status: "deleted", event: payload))
     }
 
+    private func addAttendees(_ options: Options) throws {
+        let eventID = try options.requiredString("id")
+        let event = try resolvedEvent(id: eventID)
+        let requestedEmails = parseEmails(try options.requiredString("emails"))
+
+        guard !requestedEmails.isEmpty else {
+            throw CLIError.usage("Provide at least one attendee email with --emails")
+        }
+        guard event.calendar.allowsContentModifications else {
+            throw CLIError.message("Calendar '\(event.calendar.title)' does not allow modifications.")
+        }
+        guard let externalIdentifier = normalizedOptionalText(event.calendarItemExternalIdentifier) else {
+            throw CLIError.message("This event does not expose a shareable external identifier, so attendees cannot be added through Calendar automation.")
+        }
+
+        let existingEmails = Set(
+            (event.attendees ?? [])
+                .compactMap(attendeeEmail)
+                .map(normalizeEmail)
+        )
+        let emailsToAdd = requestedEmails.filter { !existingEmails.contains($0) }
+
+        if emailsToAdd.isEmpty {
+            try JSON.write(EventResponse(event: eventPayload(event)))
+            return
+        }
+
+        try runCalendarAttendeeScript(
+            calendarIdentifier: event.calendar.calendarIdentifier,
+            eventExternalIdentifier: externalIdentifier,
+            emails: emailsToAdd
+        )
+
+        let refreshedStore = EKEventStore()
+        guard let refreshedEvent = refreshedStore.calendarItem(withIdentifier: eventID) as? EKEvent else {
+            throw CLIError.message("Attendees may have been added, but the event could not be reloaded afterward.")
+        }
+        try JSON.write(EventResponse(event: eventPayload(refreshedEvent)))
+    }
+
     private func resolvedCalendars(matching query: String?) throws -> [EKCalendar]? {
         guard let query = normalizedOptionalText(query) else {
             return nil
@@ -523,7 +576,8 @@ final class CalendarCLI {
             notes: event.notes,
             url: event.url?.absoluteString,
             hasRecurrenceRules: !(event.recurrenceRules ?? []).isEmpty,
-            timezone: event.timeZone?.identifier
+            timezone: event.timeZone?.identifier,
+            attendees: (event.attendees ?? []).map(attendeePayload)
         )
     }
 
@@ -535,6 +589,143 @@ final class CalendarCLI {
             return nil
         }
         return value
+    }
+
+    private func parseEmails(_ raw: String) -> [String] {
+        let separators = CharacterSet(charactersIn: ",;\n")
+        return Array(
+            Set(
+                raw.components(separatedBy: separators)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .map(normalizeEmail)
+            )
+        ).sorted()
+    }
+
+    private func normalizeEmail(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func attendeePayload(_ attendee: EKParticipant) -> EventPayload.AttendeePayload {
+        EventPayload.AttendeePayload(
+            name: attendee.name,
+            email: attendeeEmail(attendee),
+            status: participantStatusName(attendee.participantStatus),
+            role: participantRoleName(attendee.participantRole),
+            isCurrentUser: attendee.isCurrentUser
+        )
+    }
+
+    private func attendeeEmail(_ attendee: EKParticipant) -> String? {
+        let url = attendee.url
+        if let scheme = url.scheme?.lowercased(), scheme == "mailto" {
+            let raw = url.absoluteString.replacingOccurrences(of: "mailto:", with: "")
+            return normalizeEmail(raw.removingPercentEncoding ?? raw)
+        }
+        return normalizedOptionalText(url.absoluteString)
+    }
+
+    private func participantStatusName(_ status: EKParticipantStatus) -> String {
+        switch status {
+        case .accepted:
+            return "accepted"
+        case .declined:
+            return "declined"
+        case .tentative:
+            return "tentative"
+        case .pending:
+            return "pending"
+        case .delegated:
+            return "delegated"
+        case .completed:
+            return "completed"
+        case .inProcess:
+            return "in-process"
+        case .unknown:
+            return "unknown"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    private func participantRoleName(_ role: EKParticipantRole) -> String {
+        switch role {
+        case .required:
+            return "required"
+        case .optional:
+            return "optional"
+        case .chair:
+            return "chair"
+        case .nonParticipant:
+            return "non-participant"
+        case .unknown:
+            return "unknown"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    private func runCalendarAttendeeScript(
+        calendarIdentifier: String,
+        eventExternalIdentifier: String,
+        emails: [String]
+    ) throws {
+        let script = """
+        on run argv
+            if (count of argv) is not 3 then error "Expected calendar identifier, event external identifier, and newline-delimited emails."
+
+            set calendarIdentifierValue to item 1 of argv
+            set eventUIDValue to item 2 of argv
+            set emailBlob to item 3 of argv
+
+            if emailBlob is "" then return "ok"
+
+            set AppleScript's text item delimiters to linefeed
+            set emailItems to text items of emailBlob
+
+            tell application "Calendar"
+                set targetCalendar to first calendar whose calendarIdentifier is calendarIdentifierValue
+                set targetEvent to first event of targetCalendar whose uid is eventUIDValue
+
+                repeat with attendeeEmail in emailItems
+                    if attendeeEmail is not "" then
+                        make new attendee at end of attendees of targetEvent with properties {email:attendeeEmail}
+                    end if
+                end repeat
+            end tell
+
+            return "ok"
+        end run
+        """
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = [
+            "-e", script,
+            calendarIdentifier,
+            eventExternalIdentifier,
+            emails.joined(separator: "\n"),
+        ]
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: stderrData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw CLIError.message(
+                message?.isEmpty == false
+                    ? "Failed to add attendees through Calendar automation: \(message!)"
+                    : "Failed to add attendees through Calendar automation."
+            )
+        }
     }
 
     private func sourceTypeName(_ sourceType: EKSourceType) -> String {
